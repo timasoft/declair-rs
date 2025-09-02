@@ -132,3 +132,11 @@ nix develop
 ```
 
 It includes Rust toolchain components: `cargo`, `rustc`, `rustfmt`, `clippy`, `rust-analyzer`, and `fish` shell by default.
+
+## TODO
+
+* [ ] Add support for removing packages (`--remove`).
+* [ ] Implement listing of currently configured packages (`--list`).
+* [ ] Add `--dry-run` option to preview changes without writing.
+* [ ] Support multiple configuration files in a single profile.
+* [ ] Add autocomplete for package names.
