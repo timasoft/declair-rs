@@ -1,3 +1,4 @@
+use clap::Parser;
 use dialoguer::{Completion, Confirm, Input, Select};
 use directories::ProjectDirs;
 use gix::discover;
@@ -8,6 +9,28 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// A command-line tool to search, add, and manage NixOS or Home Manager packages with optional automatic rebuilds.
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Set config file (path to your NixOS configuration file or directory)
+    #[arg(short = 'c', long = "config", value_name = "FILE")]
+    config: Option<PathBuf>,
+
+    /// Package name to add (used as search query in interactive mode or as the
+    /// literal package name in --no-interactive mode)
+    #[arg(short = 'p', long = "package", value_name = "PACKAGE")]
+    package: Option<String>,
+
+    /// Do not prompt interactively; fail if necessary information is missing
+    #[arg(long = "no-interactive")]
+    no_interactive: bool,
+
+    /// Don't perform rebuild even if config requests it
+    #[arg(long = "no-rebuild")]
+    no_rebuild: bool,
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Config {
@@ -138,7 +161,9 @@ fn get_config_dir() -> Option<PathBuf> {
     Some(proj_dirs.config_dir().to_path_buf())
 }
 
-fn read_or_create_config() -> Result<Config, Box<dyn std::error::Error>> {
+/// Read existing program config or interactively create it.
+/// Respects `--no-interactive` from Args.
+fn read_or_create_config(args: &Args) -> Result<Config, Box<dyn std::error::Error>> {
     let config_dir = get_config_dir().ok_or("Failed to get config directory")?;
     let config_path = config_dir.join("config.toml");
     if config_path.exists() {
@@ -146,6 +171,9 @@ fn read_or_create_config() -> Result<Config, Box<dyn std::error::Error>> {
         let cfg: Config = toml::from_str(&contents)?;
         Ok(cfg)
     } else {
+        if args.no_interactive {
+            return Err("Config file not found and --no-interactive specified".into());
+        }
         fs::create_dir_all(&config_dir)?;
         let completion = FileCompletion;
         let nix_path: String = Input::new()
@@ -250,58 +278,77 @@ fn add_package_to_nix(file_path: &Path, pkg: &str) -> Result<(), Box<dyn std::er
 }
 
 fn main() {
+    let args = Args::parse();
+
     // top-level error handling
-    if let Err(e) = run() {
+    if let Err(e) = run(args) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
 }
 
-// todo
-// add parameters parsing
-// add option to disable search
-// add remove package function
-// add clap
-fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let config = read_or_create_config()?;
+fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+    let mut config = read_or_create_config(&args)?;
+
+    // If user passed --config, override the nix_path from the stored config.
+    if let Some(cfg_path) = &args.config {
+        config.nix_path = cfg_path.to_string_lossy().to_string();
+    }
+
     // expand and resolve nix config path
     let raw = config.nix_path.trim();
     let expanded = expand_tilde(raw)?;
     let nix_file = resolve_nix_config(&expanded)
         .map_err(|s| format!("Failed to use path `{}`: {}", expanded.display(), s))?;
     let git_repo = get_git_repo_or_parent_directory(&nix_file)?;
-    // ask for query
-    let query: String = Input::new()
-        .with_prompt("Search for a package")
-        .interact_text()?;
-    let pkg_map: HashMap<String, PackageInfo> =
-        search_packages(&query).map_err(|s| format!("Package search failed: {}", s))?;
-    if pkg_map.is_empty() {
-        println!("No results found");
-        return Ok(());
-    }
+
+    // obtain query: from CLI or interactively
+    let query: String = if let Some(q) = args.package.clone() {
+        q
+    } else if args.no_interactive {
+        return Err("No query provided and --no-interactive specified".into());
+    } else {
+        Input::new()
+            .with_prompt("Search for a package")
+            .interact_text()?
+    };
+
     let mut options = Vec::new();
-    for pkg in pkg_map.values() {
-        let desc = pkg.description.as_deref().unwrap_or("");
-        options.push(format!("{} {}: {}", pkg.pname, pkg.version, desc));
-    }
-    let selection = Select::new()
-        .with_prompt("Select a package:")
-        .items(&options)
-        .default(0)
-        .interact()?;
-    let selected_line = &options[selection];
-    let selected_pkg = selected_line
-        .split_whitespace()
-        .next()
-        .ok_or("Failed to extract package name")?;
+
+    let selected_pkg = if args.no_interactive {
+        &query
+    } else {
+        let pkg_map: HashMap<String, PackageInfo> =
+            search_packages(&query).map_err(|s| format!("Package search failed: {}", s))?;
+        if pkg_map.is_empty() {
+            println!("No results found");
+            return Ok(());
+        }
+        for pkg in pkg_map.values() {
+            let desc = pkg.description.as_deref().unwrap_or("");
+            options.push(format!("{} {}: {}", pkg.pname, pkg.version, desc));
+        }
+
+        let selection = Select::new()
+            .with_prompt("Select a package:")
+            .items(&options)
+            .default(0)
+            .interact()?;
+        let selected_line = &options[selection];
+        selected_line
+            .split_whitespace()
+            .next()
+            .ok_or("Failed to extract package name")?
+    };
     println!(
         "Adding `{}` to your NixOS config ({})",
         selected_pkg,
         nix_file.display()
     );
     add_package_to_nix(&nix_file, selected_pkg)?;
-    if config.auto_rebuild {
+
+    // Respect --no-rebuild flag
+    if config.auto_rebuild && !args.no_rebuild {
         println!("Rebuilding NixOS with the new package...");
         std::env::set_current_dir(&git_repo)?;
         let status = if config.flake {
@@ -324,7 +371,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if !status.success() {
             eprintln!("Error while running nixos-rebuild (exit code != 0)");
         }
+    } else if config.auto_rebuild && args.no_rebuild {
+        println!("Skipping rebuild due to --no-rebuild flag");
     }
+
     println!("Done");
     Ok(())
 }

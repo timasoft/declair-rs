@@ -1,68 +1,70 @@
 # declair-rs
 
-**declair-rs** is a small Rust command-line tool that helps you quickly add packages to your NixOS or Home Manager configuration. If you want, it can also trigger a rebuild (`nixos-rebuild` or `home-manager switch`) right after editing your config.
+**declair-rs** is a Rust command-line utility that helps you quickly search, add, and manage packages in your NixOS or Home Manager configuration. It can also optionally trigger an automatic rebuild (`nixos-rebuild` or `home-manager switch`) after modifying your config.
 
 ---
 
-## What it does
+## Features
 
-* Search packages with `nix search --json`.
-* Let you pick one interactively.
-* Insert the package into a `with pkgs; [ ... ]` block in your config file.
-* Create a backup before writing anything.
-* Optionally run a rebuild command.
+* Search packages using `nix search --json`.
+* Interactive selection of results.
+* Automatically insert the package into a `with pkgs; [ ... ]` block.
+* Creates a `.declair.bak` backup before writing.
+* Works with single-line and multi-line lists while keeping indentation.
+* Optional automatic rebuild of your system or home environment.
 
 ---
 
 ## Requirements
 
-* `nix` command (with `nix search` available)
-* `nixos-rebuild` and/or `home-manager` if you want auto rebuilds
+* `nix` (with `nix search` enabled)
+* `nixos-rebuild` and/or `home-manager` (for rebuild support)
 
 ---
 
 ## Installation
 
 This project is packaged as a Nix flake.
-Make sure you have flakes enabled in Nix.
 
-You can run **declair-rs** directly with:
+Run directly:
+
 ```bash
 nix run github:timasoft/declair-rs
 ```
 
-If you want to have declair-rs always available in your $PATH:
+Install permanently:
+
 ```bash
 nix profile install github:timasoft/declair-rs
 ```
 
-If you manage your NixOS configuration with flakes, add declair-rs as an input in your flake.nix:
+Add as an input to your own flake:
+
 ```nix
 {
   inputs.declair-rs.url = "github:timasoft/declair-rs";
 
-  outputs = { self, nixpkgs, declair-rs, ... }:
-    {
-      nixosConfigurations.my-hostname = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        modules = [
-          ./configuration.nix
-          {
-            environment.systemPackages = [
-              declair-rs.packages.x86_64-linux.default
-            ];
-          }
-        ];
-      };
+  outputs = { self, nixpkgs, declair-rs, ... }: {
+    nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./configuration.nix
+        {
+          environment.systemPackages = [
+            declair-rs.packages.x86_64-linux.default
+          ];
+        }
+      ];
     };
+  };
 }
 ```
 
 ---
 
-## Config file
+## Configuration
 
-On first run a config file will be created in your system’s config directory (for example `~/.config/declair/config.toml`).
+On first run, a config file is created under your system config directory (e.g. `~/.config/declair/config.toml`).
 
 Example:
 
@@ -73,27 +75,60 @@ home_manager = false
 flake = true
 ```
 
-* `nix_path`: file or folder with your Nix configs (supports `~`).
-* `auto_rebuild`: run rebuild/switch automatically after adding a package.
+### Options:
+
+* `nix_path`: file or directory with your Nix configuration (`~` is supported).
+* `auto_rebuild`: automatically run a rebuild after inserting a package.
 * `home_manager`: use `home-manager switch` instead of `nixos-rebuild`.
-* `flake`: add `--flake .` to the rebuild command.
+* `flake`: append `--flake .` to rebuild commands.
 
 ---
 
-## How package insertion works
+## Command-line usage
 
-* Finds a `with pkgs; [ ... ]` block.
-* Makes a `.declair.bak` backup.
-* Skips if the package is already there.
-* Inserts into single-line or multi-line lists, keeping indentation.
+```bash
+declair-rs [OPTIONS]
+```
 
-If your config is formatted in a very unusual way, double‑check the backup.
+### Available options:
+
+* `-c, --config <FILE>` – specify path to configuration file or directory
+* `-p, --package <NAME>` – package to add (used as query in interactive mode)
+* `--no-interactive` – disable prompts; fail if information is missing
+* `--no-rebuild` – skip rebuild even if config enables it
 
 ---
 
-## Example session
+## How insertion works
 
-1. Run `declair-rs` and point it at your config (e.g. `~/nixos/configuration.nix`).
+1. Finds a `with pkgs; [ ... ]` block.
+2. Makes a `.declair.bak` backup.
+3. Skips insertion if package already exists.
+4. Handles single-line (`with pkgs; [ foo bar ]`) and multi-line blocks.
+
+If your configuration is formatted in an unusual way, check the backup file.
+
+---
+
+## Example workflow
+
+```bash
+declair-rs
+```
+
+1. Select your configuration file on first run.
 2. Type a package name to search (e.g. `neovim`).
-3. Select from the list.
-4. If auto rebuild is enabled, it’ll run the appropriate command.
+3. Choose a package from the results.
+4. The tool edits your config and (if enabled) runs a rebuild.
+
+---
+
+## Development
+
+A dev shell is provided via flakes:
+
+```bash
+nix develop
+```
+
+It includes Rust toolchain components: `cargo`, `rustc`, `rustfmt`, `clippy`, `rust-analyzer`, and `fish` shell by default.
