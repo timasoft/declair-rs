@@ -1,7 +1,7 @@
 [package]
 name = "declair-rs"
 description = "A command-line tool to search, add, and manage NixOS or Home Manager packages with optional automatic rebuilds."
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 
 [dependencies]
