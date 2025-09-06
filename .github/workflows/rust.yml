@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Setup Nix
-        uses: cachix/install-nix-action@v20
+        uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
@@ -42,7 +42,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Setup Nix
-        uses: cachix/install-nix-action@v20
+        uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
