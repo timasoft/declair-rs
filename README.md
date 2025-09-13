@@ -4,15 +4,6 @@
 
 ---
 
-## Why use this
-
-* Quick interactive search (`nix search --json`) and selection UI.
-* Safe edits: creates a `.declair.bak` backup before modifying files.
-* Preserves common formatting styles (single-line and multi-line `with pkgs; [ ... ]` lists).
-* Optional automatic rebuild (`nixos-rebuild` or `home-manager switch`) after change.
-
----
-
 ## Features
 
 * Search packages using `nix search --json` and pick a result interactively.
@@ -20,6 +11,8 @@
 * Remove packages from that block (via `--remove`).
 * List packages currently present in a config file (`--list`).
 * Create a simple TOML config on first run (`~/.config/declair/config.toml`).
+* Dry-run mode to preview selected package without making changes (`--dry-run`).
+* Support for adding packages as `programs.<name>.enable = true;` when available (`--program`).
 
 ---
 
@@ -82,6 +75,8 @@ Common options:
 * `--no-rebuild` — skip automatic rebuild even if enabled in config
 * `-r, --remove` — remove package from the `with pkgs; [...]` block
 * `-l, --list` — list packages currently present in the `with pkgs; [...]` block
+* `-d, --dry-run` — perform a dry-run (only print selected package without modifying files)
+* `--program` — use `programs.<package>.enable = true;` instead of adding pkg to `with pkgs; [...]` (if available)
 
 ### Example
 
@@ -108,6 +103,18 @@ Remove a package:
 
 ```bash
 declair-rs -c ~/nixos -p somepkg -r
+```
+
+Dry-run to preview selection:
+
+```bash
+declair-rs -d firefox
+```
+
+Add package as program (when available):
+
+```bash
+declair-rs -p firefox
 ```
 
 ---
@@ -156,9 +163,8 @@ cargo run --release
 
 * [x] Add support for removing packages (`--remove`).
 * [x] Implement listing of currently configured packages (`--list`).
-* [ ] Add `--dry-run` option to preview changes without writing.
+* [x] Add `--dry-run` option to preview changes without writing.
+* [x] Support `programs.<name>.enable = true;` style package declarations.
 * [ ] Support multiple configuration files in a single profile.
 * [ ] Add autocomplete for package names.
 * [ ] Add GIF demo to the README
-
----

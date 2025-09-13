@@ -35,6 +35,14 @@ struct Args {
     #[arg(long = "no-rebuild")]
     no_rebuild: bool,
 
+    /// Perform a dry-run (Only print selected package)
+    #[arg(short = 'd', long = "dry-run")]
+    dry_run: bool,
+
+    /// Use `program.{package}.enable` = true instead of adding pkg to `with pkgs; [...]` (if available)
+    #[arg(short = 'p', long = "program")]
+    program: bool,
+
     /// Remove package from NixOS config
     #[arg(short = 'r', long = "remove")]
     remove: bool,
@@ -292,6 +300,71 @@ fn add_package_to_nix(file_path: &Path, pkg: &str) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
+/// Adds `programs.<program>.enable = true;` into the given Nix configuration file.
+fn add_program_to_nix(file_path: &Path, pattern: &str) -> Result<(), Box<dyn Error>> {
+    // Read the whole file into a string.
+    let mut contents = fs::read_to_string(file_path)
+        .map_err(|e| format!("Failed to read {}: {}", file_path.display(), e))?;
+
+    // Write a backup copy (overwrite if already exists).
+    fs::write(file_path.with_extension("declair.bak"), &contents).map_err(|e| {
+        format!(
+            "Failed to create backup `{}`: {}",
+            file_path.with_extension("declair.bak").display(),
+            e
+        )
+    })?;
+
+    if contents.contains(pattern) {
+        return Err(format!("Configuration already contains `{}`", pattern).into());
+    }
+
+    // Try to locate the insertion point. We will insert before the last '}' in the file.
+    let insert_pos = contents
+        .rfind('}')
+        .ok_or("Failed to find a closing '}' in the configuration file; cannot insert")?;
+
+    // Determine the indentation of the line containing the chosen '}'.
+    // Find the start of that line (last newline before insert_pos).
+    let line_start = contents[..insert_pos]
+        .rfind('\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+
+    // Collect leading whitespace from the line to preserve indentation style.
+    let mut indent = String::new();
+    for ch in contents[line_start..insert_pos].chars() {
+        if ch.is_whitespace() {
+            indent.push(ch);
+        } else {
+            break;
+        }
+    }
+
+    // If indentation couldn't be inferred, fall back to two spaces.
+    if indent.is_empty() {
+        indent = "  ".to_string();
+    }
+
+    // Build the insertion line. Use the inferred indent level.
+    // The inserted line will be placed directly before the final '}'.
+    let insertion = format!("{}{} = true;\n", indent, pattern);
+
+    // Insert the text at the computed position.
+    contents.insert_str(insert_pos, &insertion);
+
+    // Write the modified contents back to the file.
+    fs::write(file_path, contents).map_err(|e| {
+        format!(
+            "Failed to write updated configuration to `{}`: {}",
+            file_path.display(),
+            e
+        )
+    })?;
+
+    Ok(())
+}
+
 /// List packages found in `with pkgs; [ ... ]` block of given file.
 fn list_packages(file_path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
     let file = fs::File::open(file_path)?;
@@ -412,6 +485,74 @@ fn remove_package_from_nix(file_path: &Path, pkg: &str) -> Result<(), Box<dyn Er
     Ok(())
 }
 
+/// Removes a line like `programs.<program>.enable = true;` from the given Nix configuration file.
+fn remove_program_from_nix(file_path: &Path, pattern: &str) -> Result<(), Box<dyn Error>> {
+    // Read the file contents into a vector of lines.
+    let content = fs::read_to_string(file_path)
+        .map_err(|e| format!("Failed to read {}: {}", file_path.display(), e))?;
+    let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+
+    // Write a backup copy (overwrite if it already exists).
+    fs::write(file_path.with_extension("declair.bak"), &content).map_err(|e| {
+        format!(
+            "Failed to create backup `{}`: {}",
+            file_path.with_extension("declair.bak").display(),
+            e
+        )
+    })?;
+
+    // Try to find a line that matches the pattern.
+    let mut found_index: Option<usize> = None;
+    for (idx, raw_line) in lines.iter().enumerate() {
+        let trimmed = raw_line.trim();
+        // Skip empty lines and obvious comments.
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        // Check if the trimmed line starts with the token and contains '=' and ';'
+        if trimmed.starts_with(pattern) && trimmed.contains('=') {
+            // A simple sanity check: ensure it's likely an assignment like `... = true;`
+            // Accept variations of whitespace around '=' and an optional trailing semicolon.
+            // We'll treat this as a match and remove the entire line.
+            found_index = Some(idx);
+            break;
+        }
+    }
+
+    // If not found, return an error.
+    let remove_idx = match found_index {
+        Some(i) => i,
+        None => {
+            return Err(format!(
+                "No entry `programs.{}.enable` found in `{}`",
+                pattern,
+                file_path.display()
+            )
+            .into())
+        }
+    };
+
+    // Remove the matching line.
+    lines.remove(remove_idx);
+
+    // Optionally, also remove an immediately following blank line to keep the file tidy.
+    if remove_idx < lines.len() && lines[remove_idx].trim().is_empty() {
+        lines.remove(remove_idx);
+    }
+
+    // Join lines back into a single string and write back to the file.
+    let new_content = lines.join("\n");
+    fs::write(file_path, &new_content).map_err(|e| {
+        format!(
+            "Failed to write updated configuration to `{}`: {}",
+            file_path.display(),
+            e
+        )
+    })?;
+
+    Ok(())
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -430,6 +571,12 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         config.nix_path = cfg_path.to_string_lossy().to_string();
     }
 
+    let man_output = Command::new("sh")
+        .arg("-c")
+        .arg("man configuration.nix | col -bx")
+        .output()?;
+    let man_text = String::from_utf8_lossy(&man_output.stdout);
+
     // expand and resolve nix config path
     let raw = config.nix_path.trim();
     let expanded = expand_tilde(raw)?;
@@ -447,11 +594,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                         nix_file.display()
                     );
                 } else {
-                    // Заголовки колонок
                     let header_pkg = "Package";
                     let header_src = "Source";
 
-                    // Ширина первой колонки — максимум из длин пакетов и заголовка
                     let w1 = pkgs
                         .iter()
                         .map(|s| s.len())
@@ -459,11 +604,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                         .unwrap_or(0)
                         .max(header_pkg.len());
 
-                    // Вторая колонка — путь к файлу (одинаков для всех строк) или заголовок
                     let source = format!("{}", nix_file.display());
                     let w2 = source.len().max(header_src.len());
 
-                    // Печатаем заголовок
                     println!(
                         "{:<w1$} | {:<w2$}",
                         header_pkg,
@@ -472,10 +615,8 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                         w2 = w2
                     );
 
-                    // Корректная разделительная линия — через repeat
                     println!("{}-+-{}", "-".repeat(w1), "-".repeat(w2));
 
-                    // Печатаем строки
                     for p in pkgs {
                         println!("{:<w1$} | {:<w2$}", p, source, w1 = w1, w2 = w2);
                     }
@@ -529,9 +670,48 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             .to_string()
     };
 
+    if args.dry_run {
+        println!("Selected package: {}", selected_pkg);
+        return Ok(());
+    }
+
+    let pattern = format!("programs.{}.enable", selected_pkg);
+
+    let programs = if man_text.contains(&pattern) && !config.home_manager {
+        println!("Found `{pattern}` in `man configuration.nix`");
+        if args.program {
+            true
+        } else if args.no_interactive {
+            false
+        } else {
+            Confirm::new()
+                .with_prompt("As a program?")
+                .default(true)
+                .interact()?
+        }
+    } else {
+        false
+    };
+
     if args.remove {
-        remove_package_from_nix(&nix_file, &selected_pkg)?;
-        println!("Removed `{}` to `{}`", selected_pkg, nix_file.display());
+        if programs {
+            remove_program_from_nix(&nix_file, &pattern)?;
+            println!(
+                "Removed `{}` as program from `{}`",
+                selected_pkg,
+                nix_file.display()
+            );
+        } else {
+            remove_package_from_nix(&nix_file, &selected_pkg)?;
+            println!("Removed `{}` to `{}`", selected_pkg, nix_file.display());
+        }
+    } else if programs {
+        add_program_to_nix(&nix_file, &pattern)?;
+        println!(
+            "Added `{}` as program to `{}`",
+            selected_pkg,
+            nix_file.display()
+        );
     } else {
         add_package_to_nix(&nix_file, &selected_pkg)?;
         println!("Added `{}` to `{}`", selected_pkg, nix_file.display());
