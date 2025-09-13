@@ -40,7 +40,7 @@ struct Args {
     dry_run: bool,
 
     /// Use `program.{package}.enable` = true instead of adding pkg to `with pkgs; [...]` (if available)
-    #[arg(short = 'p', long = "program")]
+    #[arg(long = "program")]
     program: bool,
 
     /// Remove package from NixOS config
