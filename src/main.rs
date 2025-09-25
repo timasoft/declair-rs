@@ -11,8 +11,8 @@ use std::error::Error;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::exit;
 use std::process::Command;
+use std::process::exit;
 
 /// A command-line tool to search, add, and manage NixOS or Home Manager packages with optional automatic rebuilds.
 #[derive(Parser, Debug)]
@@ -26,6 +26,10 @@ struct Args {
     /// literal package name in --no-interactive mode)
     #[arg(short = 'p', long = "package", value_name = "PACKAGE")]
     package: Option<String>,
+
+    /// Use fzf for package selection (Needs fzf installed)
+    #[arg(short = 'f', long = "fzf")]
+    fzf: bool,
 
     /// Do not prompt interactively; fail if necessary information is missing
     #[arg(long = "no-interactive")]
@@ -86,7 +90,7 @@ impl Completion for FileCompletion {
             Path::new(&dir_str)
         };
         let read = fs::read_dir(dir_path).ok()?; // stop if cannot open
-                                                 // 5) Find first file/folder whose name starts with prefix
+        // 5) Find first file/folder whose name starts with prefix
         for entry in read.filter_map(Result::ok) {
             let name = entry.file_name();
             let name_s = name.to_string_lossy();
@@ -528,7 +532,7 @@ fn remove_program_from_nix(file_path: &Path, pattern: &str) -> Result<(), Box<dy
                 pattern,
                 file_path.display()
             )
-            .into())
+            .into());
         }
     };
 
@@ -634,6 +638,8 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         q
     } else if args.no_interactive {
         return Err("No query provided and --no-interactive specified".into());
+    } else if args.fzf {
+        "^".to_string()
     } else {
         Input::new()
             .with_prompt("Search for a package")
@@ -644,6 +650,37 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
 
     let selected_pkg = if args.no_interactive {
         query
+    } else if args.fzf {
+        let fzf = fzf_wrapped::Fzf::builder()
+            .prompt("Select a package: ")
+            .custom_args(vec![
+                "--select-1".to_string(),
+                "--height=40%".to_string(),
+                "--border".to_string(),
+                "--margin=0,1".to_string(),
+            ])
+            .build()
+            .map_err(|e| format!("Failed to configure fzf: {}", e))?;
+
+        let pkg_map: HashMap<String, PackageInfo> =
+            search_packages(&query).map_err(|s| format!("Package search failed: {}", s))?;
+        if pkg_map.is_empty() {
+            println!("No results found");
+            return Ok(());
+        }
+        for pkg in pkg_map.values() {
+            let desc = pkg.description.as_deref().unwrap_or("");
+            options.push(format!("{} {}: {}", pkg.pname, pkg.version, desc));
+        }
+
+        let selected_line =
+            fzf_wrapped::run_with_output(fzf, &options).ok_or("No package selected")?;
+
+        selected_line
+            .split_whitespace()
+            .next()
+            .ok_or("Failed to extract package name")?
+            .to_string()
     } else {
         let pkg_map: HashMap<String, PackageInfo> =
             search_packages(&query).map_err(|s| format!("Package search failed: {}", s))?;
