@@ -27,7 +27,7 @@ struct Args {
     #[arg(short = 'p', long = "package", value_name = "PACKAGE")]
     package: Option<String>,
 
-    /// Use fzf for package selection
+    /// Use fzf for package selection (Needs fzf installed)
     #[arg(short = 'f', long = "fzf")]
     fzf: bool,
 
