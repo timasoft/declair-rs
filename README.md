@@ -71,6 +71,7 @@ Common options:
 
 * `-c, --config <FILE>` — path to config file or directory (overrides stored config)
 * `-p, --package <NAME>` — package name or search query
+* `-f, fzf` — use fzf for package selection (needs fzf installed)
 * `--no-interactive` — run without prompts (fails if required info is missing)
 * `--no-rebuild` — skip automatic rebuild even if enabled in config
 * `-r, --remove` — remove package from the `with pkgs; [...]` block
