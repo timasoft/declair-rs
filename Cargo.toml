@@ -12,4 +12,4 @@ dialoguer = { version = "0.12", features = ["completion"] }
 directories = "6.0.0"
 gix = { version = "0.74.1", default-features = false }
 fzf-wrapped = "0.1.4"
-clap = { version = "4.5.52", features = ["derive"] }
+clap = { version = "4.5.54", features = ["derive"] }
